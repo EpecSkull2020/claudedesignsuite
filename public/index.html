@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1b18; --muted: #6b665e; --line: #e4e0d8;
+    --accent: #c2410c; --accent-ink: #ffffff; --field: #fbfaf8; --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #151412; --panel: #1e1c1a; --ink: #f1eee8; --muted: #a39d93; --line: #33302c;
+      --accent: #f97316; --accent-ink: #1a0d04; --field: #191816;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 Inter, system-ui, sans-serif; }
+  .wrap { display: grid; grid-template-columns: 360px 1fr; gap: 16px; padding: 16px; min-height: 100vh; }
+  @media (max-width: 860px) { .wrap { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 14px 0 6px; }
+  textarea, input, select {
+    width: 100%; font: inherit; color: inherit; background: var(--field);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+  }
+  textarea { min-height: 120px; resize: vertical; }
+  textarea:focus, input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button {
+    font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 11px 14px; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink); width: 100%; margin-top: 16px;
+  }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button:disabled { opacity: .55; cursor: wait; }
+  details { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+  .status { margin-top: 12px; font-size: 13px; color: var(--muted); min-height: 20px; }
+  .status.err { color: #dc2626; }
+  .stage { display: flex; flex-direction: column; padding: 0; overflow: hidden; min-height: 70vh; }
+  .bar { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .bar button { width: auto; margin: 0; padding: 7px 12px; font-size: 13px; }
+  .bar .spacer { flex: 1; }
+  .bar a { color: var(--accent); font-size: 13px; word-break: break-all; }
+  iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+  .empty { flex: 1; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 40px; }
+  .seg button.on { background: var(--ink); color: var(--panel); }
+  .frame { flex: 1; display: flex; justify-content: center; background: var(--field); }
+  .frame iframe { max-width: 100%; transition: width .2s; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="panel">
+    <h1>Design Studio</h1>
+    <p class="sub">Describe it, get a finished design back. <a href="orbit.html" style="color:var(--accent)">Photo → camera-move video</a></p>
+
+    <label for="kind">What are you making?</label>
+    <select id="kind">
+      <option value="page">Web page</option>
+      <option value="app">App screen / dashboard</option>
+      <option value="component">UI component</option>
+      <option value="slides">Slide deck</option>
+      <option value="motion">Animation / motion graphic</option>
+      <option value="poster">Poster / social graphic</option>
+      <option value="logo">Logo ideas</option>
+    </select>
+
+    <label for="prompt">Describe it</label>
+    <textarea id="prompt" placeholder="A landing page for a neighborhood bike repair shop. Friendly, a bit retro. Sections: hero, services with prices, hours, map, reviews."></textarea>
+
+    <label for="brand">Style (optional)</label>
+    <input id="brand" placeholder="e.g. navy + mustard, rounded, playful">
+
+    <button id="go">Create design</button>
+
+    <div id="reviseBox" hidden>
+      <label for="feedback">Changes</label>
+      <textarea id="feedback" placeholder="Make the hero darker and add a pricing table."></textarea>
+      <button id="revise" class="ghost">Apply changes</button>
+    </div>
+
+    <div id="status" class="status" role="status"></div>
+
+    <details>
+      <summary>Settings</summary>
+      <label for="token">Access code</label>
+      <input id="token" type="password" placeholder="Your DESIGN_API_TOKEN">
+      <label for="model">Model</label>
+      <select id="model">
+        <option value="auto" selected>Auto: picks by difficulty (cheapest)</option>
+        <option value="easy">Haiku: fast and cheap</option>
+        <option value="medium">Sonnet: balanced</option>
+        <option value="hard">Opus: best, most expensive</option>
+      </select>
+      <label for="effort">Quality vs speed</label>
+      <select id="effort">
+        <option value="medium">Faster</option>
+        <option value="high" selected>Balanced</option>
+        <option value="xhigh">Best</option>
+      </select>
+      <label for="base">Server address</label>
+      <input id="base" placeholder="Leave blank when hosted on Cloudflare">
+      <button class="ghost" id="diag">Test connection</button>
+      <pre id="diagOut" style="white-space:pre-wrap;font-size:12px;color:var(--muted);margin:8px 0 0"></pre>
+    </details>
+    <p style="font-size:12px;color:var(--muted);margin-top:18px">Personal project. Not made by or affiliated with Anthropic. Uses the Claude API.</p>
+  </section>
+
+  <section class="panel stage">
+    <div class="bar">
+      <div class="row seg" style="flex:0 0 auto">
+        <button class="ghost on" data-w="100%">Desktop</button>
+        <button class="ghost" data-w="390px">Phone</button>
+      </div>
+      <span class="spacer"></span>
+      <a id="link" target="_blank" rel="noopener" hidden></a>
+      <button class="ghost" id="mp4" hidden>Export MP4</button>
+      <button class="ghost" id="open" disabled>Open in tab</button>
+      <button class="ghost" id="dl" disabled>Download</button>
+    </div>
+    <div class="frame" id="frame">
+      <div class="empty" id="empty">Your design will show up here.</div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+  // On GitHub Pages there is no server, so requests go to the Cloudflare copy.
+  const DEFAULT_SERVER = location.hostname.endsWith("github.io") ? "https://claudedesignsuite.pages.dev" : "";
+  const apiBase = () => ($("base").value.trim() || DEFAULT_SERVER).replace(/\/$/, "");
+  ["token", "base", "effort", "model"].forEach((k) => {
+    if (store.get(k)) $(k).value = store.get(k);
+    $(k).addEventListener("change", () => store.set(k, $(k).value));
+  });
+
+  let currentHtml = "";
+  let frameWidth = "100%";
+
+  async function call(body) {
+    const base = apiBase();
+    const res = await fetch(`${base}/api/design`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...($("token").value ? { Authorization: `Bearer ${$("token").value}` } : {}) },
+      body: JSON.stringify({ ...body, brand: $("brand").value || undefined, effort: $("effort").value, model: $("model").value }),
+    });
+    const data = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+    if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+    return data;
+  }
+
+  async function run(body, btn) {
+    const status = $("status");
+    const buttons = [$("go"), $("revise")];
+    buttons.forEach((b) => (b.disabled = true));
+    status.className = "status";
+    const t0 = Date.now();
+    const tick = setInterval(() => (status.textContent = `Designing… ${Math.round((Date.now() - t0) / 1000)}s (usually 30–120s)`), 1000);
+    try {
+      const data = await call(body);
+      show(data.html);
+      if (data.url) { $("link").href = data.url; $("link").textContent = data.url; $("link").hidden = false; }
+      status.textContent = (data.truncated ? "Done, but the design was long and may be cut off." : "Done.") + (data.note ? " " + data.note : "");
+      $("reviseBox").hidden = false;
+      $("feedback").value = "";
+    } catch (e) {
+      status.className = "status err";
+      status.textContent = e.message;
+    } finally {
+      clearInterval(tick);
+      buttons.forEach((b) => (b.disabled = false));
+    }
+  }
+
+  function show(html) {
+    currentHtml = html;
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "allow-scripts allow-popups");
+    iframe.style.width = frameWidth;
+    iframe.srcdoc = html;
+    $("frame").replaceChildren(iframe);
+    $("open").disabled = $("dl").disabled = false;
+    $("mp4").hidden = !html.includes("data-motion-player");
+  }
+
+  // Motion designs record themselves inside the preview and send the video back here.
+  $("mp4").onclick = () => {
+    const f = $("frame").querySelector("iframe");
+    if (!f) return;
+    $("mp4").disabled = true;
+    $("status").className = "status";
+    $("status").textContent = "Exporting video… keep this tab in front.";
+    f.contentWindow.postMessage({ type: "motion-export" }, "*");
+  };
+  window.addEventListener("message", (e) => {
+    const f = $("frame").querySelector("iframe");
+    if (!f || e.source !== f.contentWindow) return;
+    if (e.data?.type === "motion-video") {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(e.data.blob); a.download = `motion.${e.data.ext}`; a.click();
+      $("status").textContent = `Video saved (${(e.data.blob.size / 1e6).toFixed(1)} MB).`;
+      $("mp4").disabled = false;
+    } else if (e.data?.type === "motion-error") {
+      $("status").className = "status err";
+      $("status").textContent = e.data.message;
+      $("mp4").disabled = false;
+    }
+  });
+
+  $("go").onclick = () => {
+    const prompt = $("prompt").value.trim();
+    if (!prompt) { $("status").textContent = "Describe what you want first."; return; }
+    run({ prompt, kind: $("kind").value });
+  };
+  $("revise").onclick = () => {
+    const feedback = $("feedback").value.trim();
+    if (!feedback) { $("status").textContent = "Type the changes you want."; return; }
+    run({ feedback, previous_html: currentHtml, kind: $("kind").value });
+  };
+  $("diag").onclick = async () => {
+    $("diagOut").textContent = "Testing… (about 10 seconds)";
+    try {
+      const base = apiBase();
+      const res = await fetch(`${base}/api/diagnose`, { method: "POST", headers: $("token").value ? { Authorization: `Bearer ${$("token").value}` } : {} });
+      const data = await res.json();
+      $("diagOut").textContent = data.error || data.results.map((r) => `${r.ok ? "✓" : "✗"} ${r.probe}: ${r.ok && r.probe !== "model list" ? "works" : (r.reply || r.error)}`).join("\n");
+    } catch (e) {
+      $("diagOut").textContent = e.message;
+    }
+  };
+  const blobUrl = () => URL.createObjectURL(new Blob([currentHtml], { type: "text/html" }));
+  $("open").onclick = () => window.open(blobUrl(), "_blank");
+  $("dl").onclick = () => {
+    const a = document.createElement("a");
+    a.href = blobUrl(); a.download = "design.html"; a.click();
+  };
+  document.querySelectorAll(".seg button").forEach((b) => (b.onclick = () => {
+    document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b));
+    frameWidth = b.dataset.w;
+    const f = $("frame").querySelector("iframe");
+    if (f) f.style.width = frameWidth;
+  }));
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+name = "claudedesignsuite"
+pages_build_output_dir = "public"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Tiny router model (Workers AI, free daily allowance) that picks Haiku / Sonnet / Opus per request.
+[ai]
+binding = "AI"
+
+# Optional: save every design and return a /d/<id> view link.
+# Create it with:  npx wrangler kv namespace create DESIGNS
+# then paste the id below and uncomment.
+# [[kv_namespaces]]
+# binding = "DESIGNS"
+# id = "PASTE_ID_HERE"
