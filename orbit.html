@@ -53,6 +53,11 @@
   .view canvas { width: auto; height: auto; max-width: 100%; max-height: 75vh; display: block; }
   .empty { color: #9a958c; text-align: center; padding: 40px; }
   .note { font-size: 12px; color: var(--muted); margin-top: 16px; }
+  .seg { display: flex; gap: 6px; margin: 4px 0 16px; }
+  .seg button { margin: 0; flex: 1; padding: 9px 8px; font-size: 13px; }
+  .seg button:not(.on) { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  input[type=text], input[type=password] { width: 100%; font: inherit; color: inherit; background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .view video { max-width: 100%; max-height: 75vh; display: block; }
 </style>
 </head>
 <body>
@@ -62,12 +67,32 @@
     <h1>Camera Move</h1>
     <p class="sub">Turn one photo into a video of a camera moving around it.</p>
 
+    <div class="seg" role="group" aria-label="Mode">
+      <button id="modeAi" class="on">Full 360° (AI)</button>
+      <button id="modeFree">3D move (free)</button>
+    </div>
+
     <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a photo">
       <div id="dropInner">Drop a photo here or click to choose</div>
     </div>
     <input type="file" id="file" accept="image/*" hidden>
     <button class="ghost" id="sample">Try a sample photo</button>
 
+    <div id="aiControls">
+      <label for="subject">What is it? (helps the AI)</label>
+      <input type="text" id="subject" placeholder="e.g. a red running shoe">
+      <label for="aiLen">Length</label>
+      <select id="aiLen">
+        <option value="10">10 seconds (smoother full turn)</option>
+        <option value="5">5 seconds (cheaper)</option>
+      </select>
+      <label for="aiToken">Access code</label>
+      <input type="password" id="aiToken" placeholder="Your DESIGN_API_TOKEN" autocomplete="off">
+      <button id="aiGo" disabled>Make 360° video</button>
+      <p class="note">Made by the Kling 2.6 video AI through your kie.ai account, so it uses kie credits (see kie.ai/pricing). Takes about 1 to 5 minutes. The AI imagines the sides the photo doesn't show, so check the result.</p>
+    </div>
+
+    <div id="freeControls" hidden>
     <label for="move">Camera move</label>
     <select id="move">
       <option value="orbit">Orbit: swing side to side</option>
@@ -95,14 +120,15 @@
     </select>
 
     <button id="record" disabled>Make video</button>
+    <p class="note">Everything runs on your computer, free, no account. The first photo downloads a small AI model (about 100 MB), so it takes a minute. One photo has no back side, so this mode swings up to 40°. For a full turn, use Full 360° (AI).</p>
+    </div>
     <div id="status" class="status" role="status"></div>
-    <p class="note">Everything runs on your computer, free, no account. The first photo downloads a small AI model (about 100 MB), so it takes a minute. After that it's quick.</p>
   </section>
 
   <section class="panel stage">
     <div class="bar">
-      <button class="ghost" id="play" disabled>Pause preview</button>
-      <button class="ghost" id="showDepth" disabled>Show depth map</button>
+      <button class="ghost" id="play" disabled hidden>Pause preview</button>
+      <button class="ghost" id="showDepth" disabled hidden>Show depth map</button>
       <span class="spacer"></span>
       <button class="ghost" id="download" disabled>Download video</button>
     </div>
@@ -118,7 +144,7 @@
 </script>
 <script type="module">
 import * as THREE from "three";
-import { pipeline, RawImage } from "@huggingface/transformers";
+let pipeline, RawImage;
 
 const $ = (id) => document.getElementById(id);
 const status = (msg, err) => { $("status").textContent = msg; $("status").className = err ? "status err" : "status"; };
@@ -134,6 +160,11 @@ for (const k of Object.keys(labels)) {
 let depthPipe;
 async function getDepthPipe() {
   if (depthPipe) return depthPipe;
+  try {
+    ({ pipeline, RawImage } = await import("@huggingface/transformers"));
+  } catch {
+    throw new Error("couldn't download the depth AI. Your network may block cdn.jsdelivr.net or huggingface.co. Try another network, or use Full 360° (AI).");
+  }
   const model = "onnx-community/depth-anything-v2-small";
   const progress_callback = (p) => {
     if (p.status === "progress" && p.total) status(`Downloading AI model… ${Math.round((p.loaded / p.total) * 100)}%`);
@@ -258,9 +289,6 @@ async function useImage(src) {
       img.onerror = () => bad(new Error("the image didn't load"));
       img.src = src;
     });
-    $("dropInner").innerHTML = "";
-    const thumb = img.cloneNode(); $("dropInner").append(thumb, "Click to change photo");
-
     if (!depthPipe) status("Loading AI model…");
     const pipe = await getDepthPipe();
     status("Working out the 3D shape…");
@@ -297,17 +325,6 @@ function smoothDepth(depth) {
   return out;
 }
 
-$("drop").onclick = () => $("file").click();
-$("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") $("file").click(); };
-$("file").onchange = () => $("file").files[0] && useImage(URL.createObjectURL($("file").files[0]));
-$("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
-$("drop").ondragleave = () => $("drop").classList.remove("over");
-$("drop").ondrop = (e) => {
-  e.preventDefault(); $("drop").classList.remove("over");
-  const f = e.dataTransfer.files[0];
-  if (f && f.type.startsWith("image/")) useImage(URL.createObjectURL(f));
-};
-$("sample").onclick = () => useImage("https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=1200&q=85");
 $("aspect").onchange = () => mesh && resize();
 
 $("play").onclick = () => {
@@ -374,6 +391,162 @@ $("download").onclick = () => {
 
 // Expose for quick testing from the console.
 window.cameraMove = { useImage };
+</script>
+<script>
+// Photo picking, mode switching and the AI 360° flow. This is a plain script so it still works
+// when a network blocks the CDN that the free 3D mode (the module above) needs.
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const say = (msg, err) => { $("status").textContent = msg; $("status").className = err ? "status err" : "status"; };
+  const store = {
+    get(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+  // On GitHub Pages there is no server, so requests go to the Cloudflare copy.
+  const API = location.hostname.endsWith("github.io") ? "https://claudedesignsuite.pages.dev" : "";
+  const SAMPLE = "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=1200&q=85";
+
+  let mode = "ai", photo = null, freeLoadedFor = null, aiVideo = null, busy = false;
+  $("aiToken").value = store.get("token");
+  $("aiToken").addEventListener("change", () => store.set("token", $("aiToken").value));
+
+  function setMode(m) {
+    mode = m;
+    $("modeAi").classList.toggle("on", m === "ai");
+    $("modeFree").classList.toggle("on", m === "free");
+    $("aiControls").hidden = m !== "ai";
+    $("freeControls").hidden = m !== "free";
+    $("play").hidden = $("showDepth").hidden = m !== "free";
+    say("");
+    if (m === "free") {
+      startFree();
+      $("download").disabled = true;
+    } else {
+      showAiResult();
+    }
+    updateButtons();
+  }
+  $("modeAi").onclick = () => setMode("ai");
+  $("modeFree").onclick = () => setMode("free");
+
+  // The free mode's 3D tools load separately and can take a few seconds (or be blocked).
+  function startFree(tries = 0) {
+    if (mode !== "free") return;
+    if (!window.cameraMove) {
+      if (tries < 30) { say("Loading the 3D tools…"); return setTimeout(() => startFree(tries + 1), 500); }
+      return say("The free 3D mode couldn't load. Your network may block cdn.jsdelivr.net. Try another network, or use Full 360° (AI).", true);
+    }
+    say(photo ? "" : "Choose a photo to start.");
+    if (photo && freeLoadedFor !== photo) {
+      freeLoadedFor = photo;
+      window.cameraMove.useImage(photo);
+    }
+  }
+
+  function updateButtons() { $("aiGo").disabled = !photo || busy; }
+
+  function showAiResult() {
+    if (aiVideo) {
+      const v = document.createElement("video");
+      Object.assign(v, { src: aiVideo, controls: true, loop: true, autoplay: true, muted: true, playsInline: true });
+      $("view").replaceChildren(v);
+      $("download").disabled = false;
+    } else if (photo) {
+      const img = new Image(); img.src = photo; img.style.cssText = "max-width:100%;max-height:75vh";
+      $("view").replaceChildren(img);
+      $("download").disabled = true;
+    }
+  }
+
+  function pick(src, file) {
+    if (file && (/heic|heif/i.test(file.type) || /\.(heic|heif)$/i.test(file.name))) {
+      return say("iPhone HEIC photos don't open in most browsers. Share the photo as a JPEG, or on the iPhone set Settings → Camera → Formats → Most Compatible.", true);
+    }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      photo = src; aiVideo = null; freeLoadedFor = null;
+      $("dropInner").replaceChildren(img, "Click to change photo");
+      if (mode === "free") setMode("free"); else { showAiResult(); say("Photo ready. Click Make 360° video."); }
+      updateButtons();
+    };
+    img.onerror = () => say("That file didn't open as a picture. Try a JPEG or PNG.", true);
+    img.src = src;
+  }
+  $("drop").onclick = () => $("file").click();
+  $("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") $("file").click(); };
+  $("file").onchange = () => { const f = $("file").files[0]; if (f) pick(URL.createObjectURL(f), f); };
+  $("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
+  $("drop").ondragleave = () => $("drop").classList.remove("over");
+  $("drop").ondrop = (e) => {
+    e.preventDefault(); $("drop").classList.remove("over");
+    const f = e.dataTransfer.files[0];
+    if (f) pick(URL.createObjectURL(f), f);
+  };
+  $("sample").onclick = () => pick(SAMPLE);
+
+  // Shrink to at most 1920px and re-encode as JPEG, which the video model accepts (max 10 MB).
+  async function photoAsJpeg() {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    await new Promise((ok, bad) => { img.onload = ok; img.onerror = () => bad(new Error("couldn't read the photo")); img.src = photo; });
+    const scale = Math.min(1, 1920 / Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.9);
+  }
+
+  async function call(url, init = {}) {
+    const res = await fetch(API + url, { ...init, headers: { "Content-Type": "application/json", Authorization: `Bearer ${$("aiToken").value}`, ...(init.headers || {}) } });
+    const data = await res.json().catch(() => ({ error: `Server returned ${res.status}` }));
+    if (!res.ok || data.error) throw new Error(data.error || `Error ${res.status}`);
+    return data;
+  }
+
+  $("aiGo").onclick = async () => {
+    if (!$("aiToken").value) return say("Type your access code first.", true);
+    store.set("token", $("aiToken").value);
+    busy = true; updateButtons(); $("download").disabled = true;
+    const t0 = Date.now();
+    const secs = () => Math.round((Date.now() - t0) / 1000);
+    try {
+      say("Uploading photo…");
+      const { taskId } = await call("/api/orbit360", {
+        method: "POST",
+        body: JSON.stringify({ image: await photoAsJpeg(), subject: $("subject").value, duration: $("aiLen").value }),
+      });
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const r = await call(`/api/orbit360?taskId=${encodeURIComponent(taskId)}`);
+        if (r.state === "success") {
+          if (!r.videoUrl) throw new Error("The video finished but kie.ai sent no link. Try again.");
+          aiVideo = r.videoUrl; break;
+        }
+        if (r.state === "fail") throw new Error(r.error);
+        if (secs() > 900) throw new Error("Still not done after 15 minutes. kie.ai may be busy; try again later.");
+        say(`The AI is filming your 360°… ${secs()}s (usually 1 to 5 minutes)`);
+      }
+      if (mode === "ai") showAiResult();
+      say(`Done in ${secs()}s. Click Download video to save it.`);
+    } catch (e) {
+      say(e.message, true);
+    } finally {
+      busy = false; updateButtons();
+    }
+  };
+
+  // Download: the free mode handles its own recordings; in AI mode open kie's file (it expires after a while).
+  $("download").addEventListener("click", (e) => {
+    if (mode !== "ai" || !aiVideo) return;
+    e.stopImmediatePropagation();
+    const a = document.createElement("a");
+    a.href = aiVideo; a.download = "360-video.mp4"; a.target = "_blank"; a.rel = "noopener";
+    a.click();
+  }, true);
+
+  setMode("ai");
+})();
 </script>
 </body>
 </html>
