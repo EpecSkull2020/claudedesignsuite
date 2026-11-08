@@ -43,7 +43,7 @@ Fields: `prompt`, `kind` (page, app, component, slides, poster, motion, logo), `
 
 ## Camera Move (photo → video)
 
-Open `/orbit` on your site. Drop in any photo and it makes a video of a camera swinging, circling, pushing in or rising around the subject. It's free and needs no API key: a small depth AI runs in your browser. One photo has no back side, so the camera swings up to about 40°, not a full 360°. Keep the tab in front while it records.
+Open `/orbit` on your site. **Full 360° (AI)** mode uploads the photo to kie.ai and has the Kling 2.6 video model film a full turn around the object (uses kie credits, takes 1–5 minutes, needs the access code). **3D move (free)** mode works like this: Drop in any photo and it makes a video of a camera swinging, circling, pushing in or rising around the subject. It's free and needs no API key: a small depth AI runs in your browser. One photo has no back side, so the camera swings up to about 40°, not a full 360°. Keep the tab in front while it records.
 
 ## Run it on your Mac
 
