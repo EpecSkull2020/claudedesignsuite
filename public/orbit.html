@@ -381,31 +381,51 @@ $("showDepth").onclick = () => {
 };
 
 // ---- Recording: restart the move, capture exactly one full loop ----
-let videoUrl, videoExt;
-$("record").onclick = async () => {
-  const types = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
-  const mimeType = types.find((t) => MediaRecorder.isTypeSupported(t));
-  if (!mimeType) return status("This browser can't record video. Try Chrome or Safari.", true);
-  videoExt = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+// Best path: WebCodecs encodes each frame with its own timestamp, so a 5 s video is always 5 s,
+// however slow the computer is (and it works with the tab in the background).
+// Fallback: MediaRecorder, which records in real time and can stretch on a slow computer.
+const MUXER_URL = "https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.mjs";
 
-  const was = depthView;
-  if (was) $("showDepth").click();
-  ["record", "play", "showDepth", "download"].forEach((id) => ($(id).disabled = true));
-  playing = true; $("play").textContent = "Pause preview";
+async function recordExact(frames, fps, w, h, bitrate) {
+  if (!("VideoEncoder" in window) || !("VideoFrame" in window)) return null;
+  let config;
+  for (const codec of ["avc1.640033", "avc1.4d0033", "avc1.420033", "avc1.640028", "avc1.42e028"]) {
+    const c = { codec, width: w, height: h, bitrate, framerate: fps };
+    try { if ((await VideoEncoder.isConfigSupported(c)).supported) { config = c; break; } } catch {}
+  }
+  if (!config) { console.warn("No H.264 encoder for", w, h); return null; }
+  const { Muxer, ArrayBufferTarget } = await import(MUXER_URL);
+  const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: "avc", width: w, height: h, frameRate: fps }, fastStart: "in-memory" });
+  let failed = null;
+  const enc = new VideoEncoder({ output: (chunk, meta) => muxer.addVideoChunk(chunk, meta), error: (e) => (failed = e) });
+  enc.configure(config);
+  const step = 1e6 / fps; // microseconds per frame
+  for (let i = 0; i < frames; i++) {
+    if (failed) throw failed;
+    placeCamera(i / (frames - 1));
+    renderer.render(scene, camera);
+    const frame = new VideoFrame(renderer.domElement, { timestamp: Math.round(i * step), duration: Math.round(step) });
+    enc.encode(frame, { keyFrame: i % fps === 0 });
+    frame.close();
+    if (i % 10 === 0) status(`Making video… ${Math.round((i / frames) * 100)}%`);
+    // Don't pile up frames faster than the encoder can take them.
+    while (enc.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 5));
+  }
+  await enc.flush();
+  enc.close();
+  if (failed) throw failed;
+  muxer.finalize();
+  return new Blob([muxer.target.buffer], { type: "video/mp4" });
+}
 
+async function recordRealtime(frames, fps, mimeType, bitrate) {
   // Frames are drawn and pushed one at a time, so the loop is exact even if the preview stutters.
-  const fps = 30;
   const stream = renderer.domElement.captureStream(0);
   const track = stream.getVideoTracks()[0];
-  const [w, h] = outputSize();
-  // Keep quality steady at bigger sizes: about 12 Mbps at 720p, scaled by pixel count (capped).
-  const rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: Math.min(20_000_000, Math.round(12_000_000 * (w * h) / (1280 * 720))) });
+  const rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: bitrate });
   const chunks = [];
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   const done = new Promise((r) => (rec.onstop = r));
-
-  const frames = +$("secs").value * fps;
-  recording = true;
   rec.start(500);
   for (let i = 0; i <= frames; i++) {
     const due = performance.now() + 1000 / fps;
@@ -417,16 +437,51 @@ $("record").onclick = async () => {
   }
   rec.stop();
   await done;
+  return new Blob(chunks, { type: mimeType });
+}
+
+let videoUrl, videoExt;
+$("record").onclick = async () => {
+  const was = depthView;
+  if (was) $("showDepth").click();
+  ["record", "play", "showDepth", "download"].forEach((id) => ($(id).disabled = true));
+  playing = true; $("play").textContent = "Pause preview";
+
+  const fps = 30;
+  const frames = +$("secs").value * fps;
+  const [w, h] = outputSize();
+  // Keep quality steady at bigger sizes: about 12 Mbps at 720p, scaled by pixel count (capped for kie's 50 MB upscale limit).
+  const bitrate = Math.min(20_000_000, Math.round(12_000_000 * (w * h) / (1280 * 720)));
+
+  recording = true;
+  let blob = null;
+  try {
+    blob = await recordExact(frames, fps, w, h, bitrate);
+    if (blob) videoExt = "mp4";
+  } catch (e) {
+    console.warn("Exact recording failed, using real-time recording instead:", e);
+    blob = null;
+  }
+  if (!blob) {
+    const types = ["video/mp4;codecs=avc1", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
+    const mimeType = types.find((t) => MediaRecorder.isTypeSupported(t));
+    if (!mimeType) {
+      recording = false;
+      ["record", "play", "showDepth"].forEach((id) => ($(id).disabled = false));
+      return status("This browser can't record video. Try Chrome or Safari.", true);
+    }
+    videoExt = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+    blob = await recordRealtime(frames, fps, mimeType, bitrate);
+  }
   recording = false;
   t0 = performance.now();
 
   ["record", "play", "showDepth"].forEach((id) => ($(id).disabled = false));
-  const blob = new Blob(chunks, { type: mimeType });
   if (!blob.size) return status("Recording came out empty. Keep this tab in front while it records, then try again.", true);
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   videoUrl = URL.createObjectURL(blob);
   $("download").disabled = false;
-  status(`Video ready (${videoExt.toUpperCase()}, ${w}×${h}, ${(blob.size / 1e6).toFixed(1)} MB). Click Download video.`);
+  status(`Video ready (${videoExt.toUpperCase()}, ${w}×${h}, ${$("secs").value}s, ${(blob.size / 1e6).toFixed(1)} MB). Click Download video.`);
   window.dispatchEvent(new CustomEvent("freevideo", { detail: { blob, ext: videoExt, seconds: +$("secs").value } }));
 };
 $("download").onclick = () => {
