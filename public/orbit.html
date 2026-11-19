@@ -100,6 +100,7 @@
       <option value="dolly">Push in: move toward it</option>
       <option value="crane">Crane: rise up</option>
       <option value="reveal">Reveal: swing in while pushing</option>
+      <option value="zoom">Zoom only: no camera swing</option>
     </select>
 
     <label for="zoom">Zoom</label>
@@ -115,11 +116,20 @@
     <label for="strength">3D depth <span class="val" id="strengthVal"></span></label>
     <input type="range" id="strength" min="0.05" max="0.6" step="0.01" value="0.28">
 
+    <div id="swingBox">
     <label for="swing">Camera swing <span class="val" id="swingVal"></span></label>
     <input type="range" id="swing" min="5" max="40" step="1" value="22">
+    </div>
 
     <label for="secs">Video length <span class="val" id="secsVal"></span></label>
     <input type="range" id="secs" min="3" max="15" step="1" value="6">
+
+    <label for="outSize">Output size</label>
+    <select id="outSize">
+      <option value="1280">720p (small file)</option>
+      <option value="1920" selected>1080p</option>
+    </select>
+    <p class="note" style="margin-top:6px">Browsers can't reliably record bigger than 1080p. For 2K or 4K, record here, then use Upscale above the preview.</p>
 
     <label for="aspect">Shape</label>
     <select id="aspect">
@@ -140,6 +150,12 @@
       <button class="ghost" id="play" disabled hidden>Pause preview</button>
       <button class="ghost" id="showDepth" disabled hidden>Show depth map</button>
       <span class="spacer"></span>
+      <select id="upRes" hidden aria-label="Upscale size" style="width:auto;padding:6px 8px;font-size:13px">
+        <option value="1080P">1080p</option>
+        <option value="2K" selected>2K</option>
+        <option value="4K">4K</option>
+      </select>
+      <button class="ghost" id="upscale" hidden>Upscale (kie.ai)</button>
       <button class="ghost" id="download" disabled>Download video</button>
     </div>
     <div class="view" id="view"><div class="empty" id="empty">Your preview will play here.</div></div>
@@ -237,7 +253,7 @@ function buildMesh(img, depthCanvas) {
 function outputSize() {
   const a = $("aspect").value;
   const ratio = a === "photo" ? imgAspect : a === "16:9" ? 16 / 9 : a === "9:16" ? 9 / 16 : 1;
-  const long = 1280;
+  const long = +$("outSize").value;
   const w = ratio >= 1 ? long : Math.round(long * ratio);
   const h = ratio >= 1 ? Math.round(long / ratio) : long;
   return [w - (w % 2), h - (h % 2)];
@@ -251,7 +267,7 @@ function resize() {
 
 // Camera position at time t (0..1). Distance is set so the photo fills the frame with a little extra margin.
 function placeCamera(t) {
-  const swing = THREE.MathUtils.degToRad(+$("swing").value);
+  const swing = $("move").value === "zoom" ? 0 : THREE.MathUtils.degToRad(+$("swing").value);
   const vfov = THREE.MathUtils.degToRad(camera.fov);
   const fitH = Math.max(1, imgAspect / camera.aspect);
   // Zoom in more for bigger swings so the photo's edges never come into view.
@@ -265,6 +281,7 @@ function placeCamera(t) {
     case "dolly": dist = base * (1 - 0.28 * ease(t)); pitch = swing * 0.15 * ease(t); break;
     case "crane": pitch = (ease(t) - 0.5) * swing * 1.2; dist = base * (1 - 0.1 * ease(t)); break;
     case "reveal": yaw = (1 - ease(t)) * swing; dist = base * (1 - 0.22 * ease(t)); break;
+    case "zoom": break; // the lens zoom below does all the moving
   }
   const target = new THREE.Vector3(0, 0, 0);
   camera.position.set(
@@ -343,6 +360,13 @@ function smoothDepth(depth) {
 }
 
 $("aspect").onchange = () => mesh && resize();
+$("outSize").onchange = () => mesh && resize();
+// Zoom only: no swing, so hide that slider and make sure a zoom direction is set.
+$("move").addEventListener("change", () => {
+  const zoomOnly = $("move").value === "zoom";
+  $("swingBox").hidden = zoomOnly;
+  if (zoomOnly && $("zoom").value === "none") $("zoom").value = "in";
+});
 
 $("play").onclick = () => {
   if (playing) { pausedAt = performance.now() - t0; } else { t0 = performance.now() - pausedAt; }
@@ -372,7 +396,9 @@ $("record").onclick = async () => {
   const fps = 30;
   const stream = renderer.domElement.captureStream(0);
   const track = stream.getVideoTracks()[0];
-  const rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 12_000_000 });
+  const [w, h] = outputSize();
+  // Keep quality steady at bigger sizes: about 12 Mbps at 720p, scaled by pixel count (capped).
+  const rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: Math.min(80_000_000, Math.round(12_000_000 * (w * h) / (1280 * 720))) });
   const chunks = [];
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   const done = new Promise((r) => (rec.onstop = r));
@@ -399,7 +425,8 @@ $("record").onclick = async () => {
   if (videoUrl) URL.revokeObjectURL(videoUrl);
   videoUrl = URL.createObjectURL(blob);
   $("download").disabled = false;
-  status(`Video ready (${videoExt.toUpperCase()}, ${(blob.size / 1e6).toFixed(1)} MB). Click Download video.`);
+  status(`Video ready (${videoExt.toUpperCase()}, ${w}×${h}, ${(blob.size / 1e6).toFixed(1)} MB). Click Download video.`);
+  window.dispatchEvent(new CustomEvent("freevideo", { detail: { blob, ext: videoExt, seconds: +$("secs").value } }));
 };
 $("download").onclick = () => {
   const a = document.createElement("a");
@@ -424,6 +451,9 @@ window.cameraMove = { useImage };
   const SAMPLE = "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=1200&q=85";
 
   let mode = "ai", photo = null, freeLoadedFor = null, aiVideo = null, busy = false;
+  let freeVideo = null; // { blob, ext, seconds } from the free mode's last recording
+  const upscaled = { ai: null, free: null }; // upscaled video link per mode
+  window.addEventListener("freevideo", (e) => { freeVideo = e.detail; upscaled.free = null; updateButtons(); });
   $("aiToken").value = store.get("token");
   $("aiToken").addEventListener("change", () => store.set("token", $("aiToken").value));
 
@@ -460,12 +490,23 @@ window.cameraMove = { useImage };
     }
   }
 
-  function updateButtons() { $("aiGo").disabled = !photo || busy; }
+  function updateButtons() {
+    $("aiGo").disabled = !photo || busy;
+    const hasVideo = mode === "ai" ? !!aiVideo : !!freeVideo;
+    $("upscale").hidden = $("upRes").hidden = !hasVideo;
+    $("upscale").disabled = busy;
+  }
+
+  function showVideo(src) {
+    const v = document.createElement("video");
+    Object.assign(v, { src, controls: true, loop: true, autoplay: true, muted: true, playsInline: true });
+    $("view").replaceChildren(v);
+  }
 
   function showAiResult() {
     if (aiVideo) {
       const v = document.createElement("video");
-      Object.assign(v, { src: aiVideo, controls: true, loop: true, autoplay: true, muted: true, playsInline: true });
+      Object.assign(v, { src: upscaled.ai || aiVideo, controls: true, loop: true, autoplay: true, muted: true, playsInline: true });
       $("view").replaceChildren(v);
       $("download").disabled = false;
     } else if (photo) {
@@ -482,7 +523,7 @@ window.cameraMove = { useImage };
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
-      photo = src; aiVideo = null; freeLoadedFor = null;
+      photo = src; aiVideo = null; freeLoadedFor = null; freeVideo = null; upscaled.ai = upscaled.free = null;
       $("dropInner").replaceChildren(img, "Click, drop or paste to change photo");
       if (mode === "free") setMode("free"); else { showAiResult(); say("Photo ready. Click Make 360° video."); }
       updateButtons();
@@ -558,7 +599,7 @@ window.cameraMove = { useImage };
         const r = await call(`/api/orbit360?taskId=${encodeURIComponent(taskId)}`);
         if (r.state === "success") {
           if (!r.videoUrl) throw new Error("The video finished but kie.ai sent no link. Try again.");
-          aiVideo = r.videoUrl; break;
+          aiVideo = r.videoUrl; upscaled.ai = null; break;
         }
         if (r.state === "fail") throw new Error(r.error);
         if (secs() > 900) throw new Error("Still not done after 15 minutes. kie.ai may be busy; try again later.");
@@ -575,12 +616,69 @@ window.cameraMove = { useImage };
 
   // Download: the free mode handles its own recordings; in AI mode open kie's file (it expires after a while).
   $("download").addEventListener("click", (e) => {
-    if (mode !== "ai" || !aiVideo) return;
+    const href = upscaled[mode] || (mode === "ai" ? aiVideo : null);
+    if (!href) return; // the free mode's own recording: its handler saves it
     e.stopImmediatePropagation();
     const a = document.createElement("a");
-    a.href = aiVideo; a.download = "360-video.mp4"; a.target = "_blank"; a.rel = "noopener";
+    a.href = href; a.download = upscaled[mode] ? "upscaled-video.mp4" : "360-video.mp4"; a.target = "_blank"; a.rel = "noopener";
     a.click();
   }, true);
+  // ---- Upscale with kie.ai's own video upscaler. Costs credits, so it always asks first. ----
+  const RATE = { "1080P": 0.0075, "2K": 0.015, "4K": 0.03 }; // dollars per second of video (kie.ai's listed price)
+  $("upscale").onclick = async () => {
+    const res = $("upRes").value;
+    const seconds = mode === "ai" ? +$("aiLen").value : freeVideo.seconds;
+    if (mode === "free") {
+      if (freeVideo.ext !== "mp4") return say("This browser recorded a WebM file, which kie.ai can't upscale. Record in Chrome or Safari to get an MP4.", true);
+      if (freeVideo.blob.size > 50e6) return say("This video is over 50 MB, kie.ai's limit. Pick a smaller output size or a shorter length.", true);
+    }
+    if (seconds > 60) return say("kie.ai can upscale videos up to 60 seconds.", true);
+    let code = $("aiToken").value || store.get("token");
+    if (!code) code = (prompt("Type your access code to use kie.ai:") || "").trim();
+    if (!code) return;
+    $("aiToken").value = code; store.set("token", code);
+    const cost = Math.max(0.01, seconds * RATE[res]).toFixed(2);
+    if (!confirm(`Upscale this ${seconds}-second video to ${res} with kie.ai?\n\nIt will use about $${cost} of kie credits (approximate).`)) return;
+
+    busy = true; updateButtons();
+    const t0 = Date.now();
+    const secs = () => Math.round((Date.now() - t0) / 1000);
+    const forMode = mode;
+    try {
+      let task;
+      if (forMode === "ai") {
+        say("Sending the video to kie.ai…");
+        task = await call(`/api/upscale?resolution=${res}`, { method: "POST", body: JSON.stringify({ videoUrl: aiVideo }) });
+      } else {
+        say("Uploading your video to kie.ai…");
+        const form = new FormData();
+        form.append("file", freeVideo.blob, "camera-move.mp4");
+        form.append("uploadPath", "claudedesignsuite/upscale");
+        form.append("fileName", `camera-move-${Date.now()}.mp4`);
+        // No Content-Type here: the browser adds the multipart boundary itself.
+        const r = await fetch(`${API}/api/upscale?resolution=${res}`, { method: "POST", headers: { Authorization: `Bearer ${code}` }, body: form });
+        task = await r.json().catch(() => ({ error: `Server returned ${r.status}` }));
+        if (!r.ok || task.error) throw new Error(task.error || `Error ${r.status}`);
+      }
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 5000));
+        const r = await call(`/api/upscale?taskId=${encodeURIComponent(task.taskId)}`);
+        if (r.state === "success") {
+          if (!r.videoUrl) throw new Error("The upscale finished but kie.ai sent no link. Try again.");
+          upscaled[forMode] = r.videoUrl; break;
+        }
+        if (r.state === "fail") throw new Error(r.error);
+        if (secs() > 1200) throw new Error("Still not done after 20 minutes. kie.ai may be busy; try again later.");
+        say(`kie.ai is upscaling to ${res}… ${secs()}s`);
+      }
+      if (mode === forMode) { showVideo(upscaled[forMode]); $("download").disabled = false; }
+      say(`Upscaled to ${res} in ${secs()}s. Click Download video to save it (kie.ai keeps it for 14 days).`);
+    } catch (e) {
+      say(e.message, true);
+    } finally {
+      busy = false; updateButtons();
+    }
+  };
 
   setMode("ai");
 })();
