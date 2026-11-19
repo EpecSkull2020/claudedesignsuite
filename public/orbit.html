@@ -330,7 +330,7 @@ async function useImage(src) {
     const depthCanvas = smoothDepth(depth);
     buildMesh(img, depthCanvas);
     resize();
-    $("view").replaceChildren(renderer.domElement);
+    if (!$("freeControls").hidden) $("view").replaceChildren(renderer.domElement);
     t0 = performance.now(); playing = true; $("play").textContent = "Pause preview";
     ["record", "play", "showDepth"].forEach((id) => ($(id).disabled = false));
     status("Preview ready. Adjust the sliders, then make the video.");
@@ -366,6 +366,7 @@ $("move").addEventListener("change", () => {
   const zoomOnly = $("move").value === "zoom";
   $("swingBox").hidden = zoomOnly;
   if (zoomOnly && $("zoom").value === "none") $("zoom").value = "in";
+  $("zoom").querySelector('option[value="none"]').disabled = zoomOnly;
 });
 
 $("play").onclick = () => {
@@ -398,7 +399,7 @@ $("record").onclick = async () => {
   const track = stream.getVideoTracks()[0];
   const [w, h] = outputSize();
   // Keep quality steady at bigger sizes: about 12 Mbps at 720p, scaled by pixel count (capped).
-  const rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: Math.min(80_000_000, Math.round(12_000_000 * (w * h) / (1280 * 720))) });
+  const rec = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: Math.min(20_000_000, Math.round(12_000_000 * (w * h) / (1280 * 720))) });
   const chunks = [];
   rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   const done = new Promise((r) => (rec.onstop = r));
@@ -434,7 +435,10 @@ $("download").onclick = () => {
 };
 
 // Expose for quick testing from the console.
-window.cameraMove = { useImage };
+function showPreview() {
+  if (mesh) $("view").replaceChildren(renderer.domElement);
+}
+window.cameraMove = { useImage, showPreview };
 </script>
 <script>
 // Photo picking, mode switching and the AI 360° flow. This is a plain script so it still works
@@ -452,8 +456,18 @@ window.cameraMove = { useImage };
 
   let mode = "ai", photo = null, freeLoadedFor = null, aiVideo = null, busy = false;
   let freeVideo = null; // { blob, ext, seconds } from the free mode's last recording
+  let aiSeconds = 10;   // length of the current AI 360° video
   const upscaled = { ai: null, free: null }; // upscaled video link per mode
-  window.addEventListener("freevideo", (e) => { freeVideo = e.detail; upscaled.free = null; updateButtons(); });
+  window.addEventListener("freevideo", (e) => {
+    freeVideo = e.detail; upscaled.free = null;
+    if (mode === "free") window.cameraMove.showPreview();
+    updateButtons();
+  });
+  // Touching any free-mode setting (or recording again) brings back the live 3D preview.
+  const backToPreview = () => { if (mode === "free" && window.cameraMove) window.cameraMove.showPreview(); };
+  $("freeControls").addEventListener("input", backToPreview);
+  $("freeControls").addEventListener("change", backToPreview);
+  $("record").addEventListener("click", backToPreview, true);
   $("aiToken").value = store.get("token");
   $("aiToken").addEventListener("change", () => store.set("token", $("aiToken").value));
 
@@ -467,7 +481,7 @@ window.cameraMove = { useImage };
     say("");
     if (m === "free") {
       startFree();
-      $("download").disabled = true;
+      $("download").disabled = !(freeVideo || upscaled.free);
     } else {
       showAiResult();
     }
@@ -487,6 +501,9 @@ window.cameraMove = { useImage };
     if (photo && freeLoadedFor !== photo) {
       freeLoadedFor = photo;
       window.cameraMove.useImage(photo);
+    } else if (photo) {
+      // Same photo as before: show the upscaled clip if there is one, otherwise the live preview.
+      if (upscaled.free) showVideo(upscaled.free); else window.cameraMove.showPreview();
     }
   }
 
@@ -590,6 +607,7 @@ window.cameraMove = { useImage };
     const secs = () => Math.round((Date.now() - t0) / 1000);
     try {
       say("Uploading photo…");
+      const askedSeconds = +$("aiLen").value;
       const { taskId } = await call("/api/orbit360", {
         method: "POST",
         body: JSON.stringify({ image: await photoAsJpeg(), subject: $("subject").value, duration: $("aiLen").value }),
@@ -599,7 +617,7 @@ window.cameraMove = { useImage };
         const r = await call(`/api/orbit360?taskId=${encodeURIComponent(taskId)}`);
         if (r.state === "success") {
           if (!r.videoUrl) throw new Error("The video finished but kie.ai sent no link. Try again.");
-          aiVideo = r.videoUrl; upscaled.ai = null; break;
+          aiVideo = r.videoUrl; aiSeconds = askedSeconds; upscaled.ai = null; break;
         }
         if (r.state === "fail") throw new Error(r.error);
         if (secs() > 900) throw new Error("Still not done after 15 minutes. kie.ai may be busy; try again later.");
@@ -627,7 +645,7 @@ window.cameraMove = { useImage };
   const RATE = { "1080P": 0.0075, "2K": 0.015, "4K": 0.03 }; // dollars per second of video (kie.ai's listed price)
   $("upscale").onclick = async () => {
     const res = $("upRes").value;
-    const seconds = mode === "ai" ? +$("aiLen").value : freeVideo.seconds;
+    const seconds = mode === "ai" ? aiSeconds : freeVideo.seconds;
     if (mode === "free") {
       if (freeVideo.ext !== "mp4") return say("This browser recorded a WebM file, which kie.ai can't upscale. Record in Chrome or Safari to get an MP4.", true);
       if (freeVideo.blob.size > 50e6) return say("This video is over 50 MB, kie.ai's limit. Pick a smaller output size or a shorter length.", true);
