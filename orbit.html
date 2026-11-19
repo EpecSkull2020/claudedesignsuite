@@ -73,7 +73,7 @@
     </div>
 
     <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a photo">
-      <div id="dropInner">Drop a photo here or click to choose</div>
+      <div id="dropInner">Drop, paste (⌘V / Ctrl+V) or click to choose a photo</div>
     </div>
     <input type="file" id="file" accept="image/*" hidden>
     <button class="ghost" id="sample">Try a sample photo</button>
@@ -101,6 +101,16 @@
       <option value="crane">Crane: rise up</option>
       <option value="reveal">Reveal: swing in while pushing</option>
     </select>
+
+    <label for="zoom">Zoom</label>
+    <select id="zoom">
+      <option value="none">No zoom</option>
+      <option value="in">Zoom in</option>
+      <option value="out">Zoom out (starts zoomed in)</option>
+    </select>
+
+    <label for="zoomAmt">Zoom amount <span class="val" id="zoomAmtVal"></span></label>
+    <input type="range" id="zoomAmt" min="0.1" max="1.5" step="0.05" value="0.5">
 
     <label for="strength">3D depth <span class="val" id="strengthVal"></span></label>
     <input type="range" id="strength" min="0.05" max="0.6" step="0.01" value="0.28">
@@ -150,7 +160,7 @@ const $ = (id) => document.getElementById(id);
 const status = (msg, err) => { $("status").textContent = msg; $("status").className = err ? "status err" : "status"; };
 
 // ---- Sliders show their values ----
-const labels = { strength: (v) => `${Math.round(v * 100)}%`, swing: (v) => `${v}°`, secs: (v) => `${v}s` };
+const labels = { zoomAmt: (v) => `${(1 + +v).toFixed(2)}×`, strength: (v) => `${Math.round(v * 100)}%`, swing: (v) => `${v}°`, secs: (v) => `${v}s` };
 for (const k of Object.keys(labels)) {
   const show = () => ($(`${k}Val`).textContent = labels[k]($(k).value));
   $(k).addEventListener("input", show); show();
@@ -263,6 +273,13 @@ function placeCamera(t) {
     target.z + dist * Math.cos(yaw) * Math.cos(pitch),
   );
   camera.lookAt(target);
+
+  // Lens zoom on top of the move. Zoom out starts close and ends at the normal framing,
+  // so the photo's edges stay hidden the whole time.
+  const amt = +$("zoomAmt").value;
+  const z = $("zoom").value;
+  camera.zoom = z === "in" ? 1 + amt * ease(t) : z === "out" ? 1 + amt * (1 - ease(t)) : 1;
+  camera.updateProjectionMatrix();
 }
 
 let t0 = performance.now(), pausedAt = 0, recording = false;
@@ -466,11 +483,11 @@ window.cameraMove = { useImage };
     img.crossOrigin = "anonymous";
     img.onload = () => {
       photo = src; aiVideo = null; freeLoadedFor = null;
-      $("dropInner").replaceChildren(img, "Click to change photo");
+      $("dropInner").replaceChildren(img, "Click, drop or paste to change photo");
       if (mode === "free") setMode("free"); else { showAiResult(); say("Photo ready. Click Make 360° video."); }
       updateButtons();
     };
-    img.onerror = () => say("That file didn't open as a picture. Try a JPEG or PNG.", true);
+    img.onerror = () => say(file ? "That file didn't open as a picture. Try a JPEG or PNG." : "Couldn't load that picture link. Some sites block it; save the picture and drop it here instead.", true);
     img.src = src;
   }
   $("drop").onclick = () => $("file").click();
@@ -484,6 +501,26 @@ window.cameraMove = { useImage };
     if (f) pick(URL.createObjectURL(f), f);
   };
   $("sample").onclick = () => pick(SAMPLE);
+
+  // Paste a photo (Cmd+V / Ctrl+V): a copied image, a copied image file, or a copied image link.
+  document.addEventListener("paste", (e) => {
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA") && t.type !== "file") return; // normal text paste
+    const items = [...(e.clipboardData?.items || [])];
+    const imageItem = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
+    if (imageItem) {
+      e.preventDefault();
+      const f = imageItem.getAsFile();
+      return pick(URL.createObjectURL(f), f);
+    }
+    const text = e.clipboardData?.getData("text")?.trim();
+    if (/^https?:\/\/\S+$/i.test(text || "")) {
+      e.preventDefault();
+      pick(text);
+    } else if (items.length) {
+      say("There's no picture on your clipboard. Copy an image (or right-click a picture → Copy Image), then paste.", true);
+    }
+  });
 
   // Shrink to at most 1920px and re-encode as JPEG, which the video model accepts (max 10 MB).
   async function photoAsJpeg() {
